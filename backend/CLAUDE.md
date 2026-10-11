@@ -105,6 +105,18 @@
   hlášku lze dohledat v `t_log_powerapp.error_message` (zapisuje ji
   `ErrorLoggingExceptionHandler`), klientovi jde jen obecná zpráva.
 
+## Zápis důvodu k vyrobené položce (`t_workplan_produced`)
+
+- **Řádek se identifikuje klíčem `id_job_suffix_oper` + `node` + `date`, ne `id`.**
+  `t_workplan_produced` se během dne při aktualizaci z ERP TRUNCATE-uje a načítá znovu,
+  takže `id` se mění (id z prohlížeče by po refreshi mohlo ukazovat na jiný řádek).
+  Endpoint je `POST /api/produced/reason` (tělo `SubmitProducedReasonRequest`),
+  `ProducedService.SubmitReasonAsync` aktualizuje všechny řádky odpovídající klíči a
+  stejný klíč zapisuje do `t_workplan_reasons` (historie; původní Power Apps appka měla
+  tamtéž `id_job_suffix_oper` + `node` + `date`). `date` posílá frontend z řádku, ne z
+  filtru. Kdyby se tabulka přesypala mezi SELECT a UPDATE, `DbUpdateConcurrencyException`
+  → 404 s vysvětlující hláškou (transakce se vrátí, uživatel zkusí znovu).
+
 ## Autentizace a autorizace
 
 - Windows Authentication přes `Microsoft.AspNetCore.Authentication.Negotiate`,

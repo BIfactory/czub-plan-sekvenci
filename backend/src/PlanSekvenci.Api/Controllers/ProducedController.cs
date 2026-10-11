@@ -36,15 +36,19 @@ public class ProducedController(ProducedService producedService) : ControllerBas
         return Ok(await producedService.GetSummaryAsync(effectiveDate, node, rgid, ct));
     }
 
-    [HttpPost("{id:long}/reason")]
-    public async Task<IActionResult> SubmitReason(long id, [FromQuery] string? node, [FromBody] SubmitReasonRequest request, CancellationToken ct)
+    [HttpPost("reason")]
+    public async Task<IActionResult> SubmitReason([FromBody] SubmitProducedReasonRequest request, CancellationToken ct)
     {
         var userName = User.Identity?.Name ?? "unknown";
-        var result = await producedService.SubmitReasonAsync(id, node, request.Reason, request.Note, userName, ct);
+        var result = await producedService.SubmitReasonAsync(
+            request.IdJobSuffixOper, request.Node, request.Date, request.Reason, request.Note, userName, ct);
         return result switch
         {
             ReasonSubmitResult.Success => NoContent(),
-            ReasonSubmitResult.NotFound => NotFound(),
+            ReasonSubmitResult.NotFound => NotFound(new ProblemDetails
+            {
+                Title = "Záznam nebyl nalezen - data se mezitím aktualizovala. Obnovte stránku a zkuste to znovu.",
+            }),
             ReasonSubmitResult.InvalidReason => BadRequest(new ProblemDetails { Title = "Neplatný důvod - musí odpovídat číselníku." }),
             _ => throw new InvalidOperationException(),
         };

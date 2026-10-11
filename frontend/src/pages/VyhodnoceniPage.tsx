@@ -7,25 +7,10 @@ import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { useClientSettings } from "../hooks/useClientSettings";
 import { useNavSlot } from "../hooks/useNavSlot";
 import { usePersistedNodeFilters } from "../hooks/usePersistedNodeFilters";
+import { useYesterday } from "../hooks/useYesterday";
 import RefreshBar from "../components/RefreshBar";
 import ReasonPanel from "../components/ReasonPanel";
 import FilterSelect from "../components/FilterSelect";
-
-// yyyy-MM-dd z lokalnich casti data (ne toISOString(), ktera prevadi na UTC a v nocnich
-// hodinach by mohla vratit jiny den nez je aktualne lokalne).
-function toDateInputValue(d: Date): string {
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${month}-${day}`;
-}
-
-// PRD 6.2 / Vyhodnocení.pa.yaml (filter_date.SelectedDate): vychozi vybrane datum je
-// "vcera", ne dnesek.
-function yesterday(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return toDateInputValue(d);
-}
 
 function distinctSorted(values: (string | null | undefined)[]): string[] {
   return Array.from(new Set(values.filter((v): v is string => !!v))).sort((a, b) => a.localeCompare(b));
@@ -42,7 +27,12 @@ export default function VyhodnoceniPage() {
   const [summary, setSummary] = useState<ProducedSummary | null>(null);
   const [overPlan, setOverPlan] = useState<OverPlanItem[]>([]);
 
-  const [date, setDate] = useState(yesterday());
+  // PRD 6.2: vychozi datum je "vcera" a posouva se s pulnoci (useYesterday). selectedDate
+  // je jen rucni volba uzivatele - dokud je null, plati automaticke "vcera", takze
+  // zalozka nechana otevrena pres noc prejde na novy den a nenacita dal ten puvodni.
+  const defaultDate = useYesterday();
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const date = selectedDate ?? defaultDate;
   // PRD 6.2 / Vyhodnocení.pa.yaml (filter_date.StartDate/EndDate) - vyber datumu je
   // omezeny na rozsah z v_calendar_last_3_workdays (nejstarsi..nejnovejsi).
   const [availableDates, setAvailableDates] = useState<string[]>([]);
@@ -131,6 +121,8 @@ export default function VyhodnoceniPage() {
     loadOverPlan();
     loadSummary();
     api.lastSync().then((r) => setLastSync(r.startTime));
+    // min/max filtru Datum - po pulnoci se rozsah z v_calendar_last_3_workdays posouva.
+    api.availableDates().then(setAvailableDates);
     stale.markRefreshed();
   };
 
@@ -160,7 +152,15 @@ export default function VyhodnoceniPage() {
           <div className="ps-filter-grid ps-filter-grid-3">
             <label className="filter-select-field">
               <span className="filter-select-label">Datum</span>
-              <input type="date" value={date} min={minDate} max={maxDate} onChange={(e) => setDate(e.target.value)} />
+              <input
+                type="date"
+                value={date}
+                min={minDate}
+                max={maxDate}
+                // Volba rovna aktualnimu "vcera" (nebo vymazane pole) = zpet na automaticky
+                // rezim, aby se datum posunulo i pri pozdejsim prechodu pres pulnoc.
+                onChange={(e) => setSelectedDate(e.target.value && e.target.value !== defaultDate ? e.target.value : null)}
+              />
             </label>
             <FilterSelect label="Provoz" value={plant} options={plantOptions} onChange={setPlant} />
             <FilterSelect label="Dílna" value={dept} options={deptOptions} onChange={setDept} />
@@ -348,7 +348,15 @@ export default function VyhodnoceniPage() {
           targetLabel={reasonTarget.idJobSuffixOper ?? ""}
           reasons={reasons}
           onSubmit={async (reason, note) => {
-            await api.submitProducedReason(reasonTarget.id, reasonTarget.node ?? undefined, reason, note);
+            // Klic radku (ne id - viz api/client.ts); datum z radku, ne z filtru.
+            if (!reasonTarget.idJobSuffixOper || !reasonTarget.node || !reasonTarget.date) {
+              throw new Error("Záznam nemá úplný klíč (operace/uzel/datum), důvod nelze uložit.");
+            }
+            await api.submitProducedReason(
+              { idJobSuffixOper: reasonTarget.idJobSuffixOper, node: reasonTarget.node, date: reasonTarget.date },
+              reason,
+              note,
+            );
             loadProduced();
           }}
           onClose={() => setReasonTarget(null)}

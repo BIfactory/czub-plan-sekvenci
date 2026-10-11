@@ -1,4 +1,18 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace PlanSekvenci.Api.Dtos;
+
+// Zapis duvodu k vyrobene polozce. Radek se identifikuje prirozenym klicem
+// id_job_suffix_oper + node + date, NE technickym id - t_workplan_produced se behem dne
+// pri aktualizaci z ERP TRUNCATE-uje a nacita znovu, takze id se meni a stary id z
+// prohlizece by po refreshi mohl ukazovat na uplne jiny radek. Atributy bez "property:"
+// cile - viz poznamka u SubmitReasonRequest.
+public record SubmitProducedReasonRequest(
+    [Required, MaxLength(100)] string IdJobSuffixOper,
+    [Required, MaxLength(150)] string Node,
+    DateOnly Date,
+    [MaxLength(100)] string? Reason,
+    [MaxLength(600)] string? Note);
 
 // Radek gridu "Vyhodnoceni" (PRD 6.4).
 public record ProducedItemDto(

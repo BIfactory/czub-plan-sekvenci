@@ -135,10 +135,19 @@ public class ProducedService(BiAppDbContext db, AuditLogService auditLog)
     // PRD 6.6: insert do t_workplan_reasons, update t_workplan_produced a zapis do audit
     // logu v jedne transakci. Faze 3 - Reason musi byt prazdny nebo odpovidat ciselniku
     // dim_workplan_reasons (viz WorkplanService.SubmitReasonAsync - stejne pravidlo).
-    public async Task<ReasonSubmitResult> SubmitReasonAsync(long id, string? node, string? reason, string? note, string userName, CancellationToken ct)
+    //
+    // Radek se hleda podle id_job_suffix_oper + node + date, ne podle id: t_workplan_produced
+    // se behem dne pri aktualizaci z ERP TRUNCATE-uje, takze id se meni a id z prohlizece by
+    // po refreshi mohlo ukazovat na jiny radek. Stejny klic pouziva t_workplan_reasons
+    // (historie), takze oba zapisy zustavaji konzistentni. Kdyby klicu odpovidalo vic
+    // radku (napr. ruzne rgid), aktualizuji se vsechny - jde o stejnou operaci/uzel/den.
+    public async Task<ReasonSubmitResult> SubmitReasonAsync(
+        string idJobSuffixOper, string node, DateOnly date, string? reason, string? note, string userName, CancellationToken ct)
     {
-        var entity = await db.WorkplanProduced.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (entity is null)
+        var entities = await db.WorkplanProduced
+            .Where(x => x.IdJobSuffixOper == idJobSuffixOper && x.Node == node && x.Date == date)
+            .ToListAsync(ct);
+        if (entities.Count == 0)
         {
             return ReasonSubmitResult.NotFound;
         }
@@ -150,28 +159,45 @@ public class ProducedService(BiAppDbContext db, AuditLogService auditLog)
 
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
-        var oldValue = $"reason: {entity.Reason ?? "-"} | note: {entity.ReasonNote ?? ""}";
+        var first = entities[0];
+        var oldValue = $"reason: {first.Reason ?? "-"} | note: {first.ReasonNote ?? ""}";
         var newValue = $"reason: {(string.IsNullOrEmpty(reason) ? "-" : reason)} | note: {note ?? ""}";
 
         db.WorkplanReasons.Add(new WorkplanReason
         {
             TimeStamp = DateTime.Now,
-            IdJobSuffixOper = entity.IdJobSuffixOper,
-            Node = node ?? entity.Node,
+            IdJobSuffixOper = idJobSuffixOper,
+            Node = node,
             Reason = string.IsNullOrEmpty(reason) ? "-" : reason,
             Note = note,
             User = userName,
-            Date = entity.Date ?? DateOnly.FromDateTime(DateTime.Today),
+            Date = date,
         });
 
-        entity.Reason = reason;
-        entity.ReasonNote = note;
-        entity.ReasonLastUpdateTime = DateTime.Now;
-        entity.ReasonLastUpdateBy = userName;
+        var now = DateTime.Now;
+        foreach (var entity in entities)
+        {
+            entity.Reason = reason;
+            entity.ReasonNote = note;
+            entity.ReasonLastUpdateTime = now;
+            entity.ReasonLastUpdateBy = userName;
+        }
 
-        auditLog.Log(userName, "reason", "produced", id.ToString(), node ?? entity.Node, oldValue, newValue);
+        // entity_id je nvarchar(100) - prirozeny klic je v praxi hluboko pod limitem, orez je jen pojistka.
+        var auditEntityId = $"{idJobSuffixOper}|{node}|{date:yyyy-MM-dd}";
+        auditLog.Log(userName, "reason", "produced", auditEntityId.Length > 100 ? auditEntityId[..100] : auditEntityId, node, oldValue, newValue);
 
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Tabulka se mezi SELECT a UPDATE znovu naplnila (TRUNCATE + load z ERP) - radek
+            // s puvodnim id uz neexistuje. Transakce se vrati zpet, uzivatel to zkusi znovu.
+            return ReasonSubmitResult.NotFound;
+        }
+
         await transaction.CommitAsync(ct);
         return ReasonSubmitResult.Success;
     }

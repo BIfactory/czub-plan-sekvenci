@@ -102,10 +102,16 @@ export const api = {
   produced: (params: { date?: string; node?: string; rgid?: string }) =>
     request<ProducedItem[]>(`/produced${buildQuery(params)}`),
   producedRgids: (node?: string) => request<string[]>(`/produced/rgids${buildQuery({ node })}`),
-  submitProducedReason: (id: number, node: string | undefined, reason: string, note: string) =>
-    request<void>(`/produced/${id}/reason${buildQuery({ node })}`, {
+  // Radek se identifikuje klicem idJobSuffixOper + node + date (ne id - t_workplan_produced
+  // se behem dne TRUNCATE-uje a id se meni), date je datum zapisu z radku, ne z filtru.
+  submitProducedReason: (
+    key: { idJobSuffixOper: string; node: string; date: string },
+    reason: string,
+    note: string,
+  ) =>
+    request<void>("/produced/reason", {
       method: "POST",
-      body: JSON.stringify({ reason, note }),
+      body: JSON.stringify({ ...key, reason, note }),
     }),
   producedOverPlan: (params: { date?: string; node?: string; rgid?: string }) =>
     request<OverPlanItem[]>(`/produced/overplan${buildQuery(params)}`),
